@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>20x20 Cubes Matrix - Three.js</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="https://threejsfundamentals.org/threejs/resources/threejs/r127/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x87ceeb); // Set background color to sky blue
+        document.body.appendChild(renderer.domElement);
+
+        // Orbit controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = true;
+        controls.rotateSpeed = 0.7;
+
+        // Blue plane
+        const planeGeometry = new THREE.PlaneGeometry(40, 40);
+        const planeMaterial = new THREE.MeshLambertMaterial({ color: 0x0043cf });
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        plane.rotation.x = -Math.PI / 2;
+        scene.add(plane);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xf0f0c0);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
+        directionalLight.position.set(0, 10, 10);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+
+        class Cube {
+            constructor(x, y, z, color, height, selectable = true) {
+                this.geometry = new THREE.BoxGeometry(1, height, 1);
+                this.material = new THREE.MeshLambertMaterial({ color: color });
+                this.mesh = new THREE.Mesh(this.geometry, this.material);
+
+                // Create a wireframe for the top edges of each cube
+                const edgesGeometry = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1));
+                const edgesMaterial = new THREE.LineBasicMaterial({ 
+                    color: 0xffffff, 
+                    transparent: true, 
+                    opacity: 0.1, 
+                    linewidth: 11 // Adjust thickness
+                });
+                const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+                edges.rotation.x = Math.PI / 2;
+                edges.position.y = height / 2 + 0.01; // Slightly above the cube's top surface
+                edges.raycast = () => {}; // Ignore raycasting on the wireframe
+                this.mesh.add(edges);
+
+                this.mesh.position.set(x, y, z);
+                scene.add(this.mesh);
+
+                this.originalColor = color;
+                this.originalHeight = height;
+                this.selected = false;
+                this.groundState = false;
+                this.selectable = selectable;
+                this.state = ''; // State can be '', 'startPoint', or 'endPoint'
+            }
+
+            flatten() {
+                if (this.selectable) {
+                    this.mesh.scale.y = 0.01;
+                    this.mesh.position.y = 0.005; // Position it just above the green plane
+                    this.originalColor = 0x957153; // Update original color to light brown
+                    this.material.color.set(this.originalColor);
+                    this.groundState = true;
+                }
+            }
+
+            restore() {
+                if (this.selectable && this.state === '') {
+                    this.mesh.scale.y = 1;
+                    this.mesh.position.y = this.originalHeight / 2;
+                    this.originalColor = 0x4ba220; // Update original color to initial green
+                    this.material.color.set(this.originalColor);
+                    this.groundState = false;
+                }
+            }
+
+            select() {
+                if (this.selectable) {
+                    if (this.groundState) {
+                        this.material.color.set(0x756074); // Selection color for groundState = true
+                    } else {
+                        this.material.color.set(0x3b8220);  // Selection color for groundState = false
+                    }
+                    this.selected = true;
+                }
+            }
+
+            deselect() {
+                if (this.selectable) {
+                    this.material.color.set(this.originalColor);
+                    this.selected = false;
+                }
+            }
+
+            checkGroundState() {
+                if (this.selectable) {
+                    if (this.groundState) {
+                        this.flatten();
+                    } else {
+                        this.restore();
+                    }
+                }
+            }
+
+            checkSelected() {
+                if (this.selectable) {
+                    if (this.selected) {
+                        this.select();
+                    } else {
+                        this.deselect();
+                    }
+                }
+            }
+
+            applyLetterTexture(letter) {
+                if (this.selectable) {
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.width = 256;
+                    canvas.height = 256;
+
+                    // Fill the canvas background
+                    context.fillStyle = '#FFFFFF'; // Use light brown color as background
+                    context.fillRect(0, 0, canvas.width, canvas.height);
+
+                    // Draw the letter
+                    context.fillStyle = '#000000'; // Black text color
+                    context.font = 'bold 100px Cambria';
+                    context.textAlign = 'center';
+                    context.textBaseline = 'middle';
+                    context.fillText(letter, canvas.width / 2, canvas.height / 2);
+
+                    // Create a texture
+                    const texture = new THREE.CanvasTexture(canvas);
+                    this.material.map = texture;
+                    this.material.needsUpdate = true;
+                }
+            }
+
+            updateTexture() {
+                if (this.selectable) {
+                    if (this.state === 'startPoint') {
+                        this.applyLetterTexture('Start');
+                    } else if (this.state === 'endPoint') {
+                        this.applyLetterTexture('End');
+                    } else {
+                        this.material.map = null;
+                        this.material.needsUpdate = true;
+                    }
+                }
+            }
+        }
+
+        // Variables to store cubes and their original colors
+        const cubes = [];
+        const selectedCubes = new Set();
+        let specialCube = null; // Variable to keep track of the special cube with the 'S' texture
+        let endPointCube = null; // Variable to keep track of the special cube with the 'E' texture
+
+        // Create 20x20 cubes matrix
+        const cubeSize = 1;
+        const spacing = 0; // No space between cubes
+        const startX = -((cubeSize + spacing) * 20 - spacing) / 2;
+        const startZ = -((cubeSize + spacing) * 20 - spacing) / 2;
+
+        for (let i = 0; i < 20; i++) {
+            for (let j = 0; j < 20; j++) {
+                const isEdge = i === 0 || i === 19 || j === 0 || j === 19;
+                const color = isEdge ? 0x81888f : 0x4ba220;   //
+                const selectable = !isEdge; // Edges are not selectable
+                const cube = new Cube(startX + i * (cubeSize + spacing), cubeSize / 2, startZ + j * (cubeSize + spacing), color, cubeSize, selectable);
+                cubes.push(cube);
+            }
+        }
+
+        // Camera position
+        camera.position.set(15, 20, 15);
+        camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+        // Raycaster for detecting mouse clicks
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Event listener for mouse click
+        function onMouseClick(event) {
+            playBubblePopSound(2600, 0.2);
+            // Calculate mouse position in normalized device coordinates (-1 to +1) for both components
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+
+            // Update the raycaster with the camera and mouse position
+            raycaster.setFromCamera(mouse, camera);
+
+            // Calculate objects intersecting the raycaster
+            const intersects = raycaster.intersectObjects(cubes.map(cube => cube.mesh));
+
+            if (intersects.length > 0) {
+                const intersectedCube = cubes.find(cube => cube.mesh === intersects[0].object);
+
+                // Only select the cube if it is selectable
+                if (intersectedCube.selectable) {
+                    // Check if the cube is already selected
+                    if (selectedCubes.has(intersectedCube)) {
+                        // Deselect the cube
+                        intersectedCube.deselect();
+                        selectedCubes.delete(intersectedCube);
+                    } else {
+                        // Select the new cube
+                        intersectedCube.select();
+                        selectedCubes.add(intersectedCube);
+                    }
+                }
+            }
+        }
+
+        // Create an AudioContext
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // Flag to track if a sound is currently playing
+        let isSoundPlaying = false;
+
+        function playBubblePopSound(freq, vol) {
+            // Check if a sound is already playing
+            if (!isSoundPlaying) {
+                // Set the flag to true to indicate that a sound is playing
+                isSoundPlaying = true;
+
+                // Create a white noise buffer
+                const bufferSize = audioContext.sampleRate * 0.1; // 0.1 seconds
+                const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    noiseData[i] = Math.random() * 2 - 1; // Generate random noise between -1 and 1
+                }
+
+                // Create a buffer source node and set the buffer
+                const noiseSource = audioContext.createBufferSource();
+                noiseSource.buffer = noiseBuffer;
+
+                // Create a low-pass filter
+                const lowPassFilter = audioContext.createBiquadFilter();
+                lowPassFilter.type = 'lowpass'; // Low-pass filter
+                lowPassFilter.frequency.value = 150 + Math.random() * freq; // Randomized cutoff frequency between 800 and 1600 Hz
+                lowPassFilter.Q.value = 0.7; // Quality factor
+
+                // Create a gain node to control volume
+                const gainNode = audioContext.createGain();
+                gainNode.gain.value = vol; // Set volume (0 to 1)
+
+                // Connect the nodes
+                noiseSource.connect(lowPassFilter);
+                lowPassFilter.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                // Start the noise source
+                noiseSource.start();
+
+                // Ramp down the gain to create a fade-out effect
+                const stopTime = audioContext.currentTime + 0.02 + Math.random() * 0.16;
+
+                // Ramp down the gain to create a fade-out effect
+                gainNode.gain.exponentialRampToValueAtTime(0.01, stopTime);
+
+                // Stop the noise source after the random stop time
+                noiseSource.stop(stopTime);
+
+                // When the sound finishes playing, reset the flag
+                noiseSource.onended = function () {
+                    isSoundPlaying = false;
+                };
+            }
+        }
+        // End of audio function
+
+        // Event listener for keydown
+        function onKeyDown(event) {
+            console.log('Key pressed: ', event.key); // Debugging
+            playBubblePopSound(700, 1);
+            if (event.key === 'Delete') {
+                selectedCubes.forEach(cube => {
+                    if (cube.selectable) {
+                        cube.deselect(); // Deselect to restore original color
+                        cube.flatten();
+                    }
+                    selectedCubes.delete(cube);
+                });
+                
+                cubes.forEach(cube => cube.checkGroundState());
+            } else if (event.key === ' ') {
+                selectedCubes.forEach(cube => {
+                    if (cube.selectable) {
+                        if (cube.state === '') {
+                            cube.groundState = false;
+                            cube.restore();
+                        }
+                        cube.deselect(); // Deselect the cube after restoring
+                    }
+                    selectedCubes.delete(cube); // Remove it from the set of selected cubes
+                });
+                // Update all cubes to ensure they are in the correct state
+                cubes.forEach(cube => cube.checkGroundState());
+            } else if (event.key === 'S' || event.key === 's') {
+                console.log('S key pressed'); // Debugging
+                selectedCubes.forEach(cube => {
+                    if (cube.selectable && cube.groundState) {
+                        if (specialCube) {
+                            specialCube.state = '';
+                            specialCube.updateTexture();
+                        }
+                        cube.state = 'startPoint';
+                        cube.updateTexture();
+                        specialCube = cube;
+                    }
+                });
+            } else if (event.key === 'E' || event.key === 'e') {
+                console.log('E key pressed'); // Debugging
+                selectedCubes.forEach(cube => {
+                    if (cube.selectable && cube.groundState ) {
+                        if (endPointCube) {
+                            endPointCube.state = '';
+                            endPointCube.updateTexture();
+                        }
+                        cube.state = 'endPoint';
+                        cube.updateTexture();
+                        endPointCube = cube;
+                    }
+                });
+            }
+        }
+
+        window.addEventListener('click', onMouseClick, false);
+        window.addEventListener('keydown', onKeyDown, false);
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
